@@ -352,6 +352,17 @@ class ChannelSubscriptionManager:
     async def process_channel_buttons(self, buttons: List[Dict[str, Any]]):
         """Подписаться на каналы (левая колонка), затем проверка (правая)."""
         
+        current_time = time.time()
+        if self.subscription_blocked and current_time < self.global_wait_until:
+            remaining_time = int(self.global_wait_until - current_time)
+            print(f"[АВТО] Подписки заблокированы еще на {remaining_time} секунд, пропускаем обработку")
+            return
+        elif self.subscription_blocked and current_time >= self.global_wait_until:
+            print(f"[АВТО] Время блокировки истекло, снимаем блокировку подписок")
+            self.subscription_blocked = False
+            self.global_wait_until = 0
+
+        
         rows = {}
         for idx, btn in enumerate(buttons):
             row = btn.get('row', 0)
@@ -360,6 +371,7 @@ class ChannelSubscriptionManager:
         
         ordered_rows = sorted(rows.items())
 
+        processed_any = False
         
         for _, btns in ordered_rows:
             
@@ -374,8 +386,14 @@ class ChannelSubscriptionManager:
                 'url': url_btn[1].get('url', ''),
                 'text': url_btn[1].get('text', '')
             }
+            
+            
+            if channel_info['url'] in self.subscribed_channels:
+                continue
+                
             print(f"▶ Подписка: {channel_info['text']}")
             result = await self.subscribe_to_channel(channel_info)
+            processed_any = True
 
             
             if isinstance(result, str) and 'wait' in result.lower():
@@ -392,4 +410,11 @@ class ChannelSubscriptionManager:
                 await self.click_button(check_btn[0])
                 await asyncio.sleep(random.randint(*self.check_delay_range))
 
-            await asyncio.sleep(random.randint(*self.sub_delay_range)) 
+            await asyncio.sleep(random.randint(*self.sub_delay_range))
+        
+        
+        if not processed_any:
+            print("[АВТО] Все каналы уже обработаны, завершаем")
+            self.subscription_processing = False
+            self.last_subscription_message = None
+            self.last_subscription_buttons = None 
