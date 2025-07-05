@@ -12,19 +12,19 @@ class ChannelSubscriptionManager:
 
     def __init__(self, bot_handler):
         self.bot = bot_handler
-        # базовые интервалы задержек (сек.)
+        
         self.sub_delay_range = (12, 22)
         self.check_delay_range = (5, 9)
 
-    # Проксирование атрибутов к исходному BotHandler
+    
     def __getattr__(self, name):
         return getattr(self.bot, name)
 
-    # --- методы, перенесённые из BotHandler ---
+    
 
     async def handle_channel_subscriptions(self, buttons: List[Dict[str, Any]]):
         """Автоматическая подписка на каналы и проверка подписки"""
-        # DEBUG вывод структуры кнопок
+        
         print("[DEBUG] Структура кнопок (row/column/text/type/url):")
         for btn in buttons:
             print(f"ROW: {btn.get('row')} COL: {btn.get('column')} TEXT: {btn.get('text')} TYPE: {btn.get('type')} URL: {btn.get('url', '')}")
@@ -351,51 +351,45 @@ class ChannelSubscriptionManager:
 
     async def process_channel_buttons(self, buttons: List[Dict[str, Any]]):
         """Подписаться на каналы (левая колонка), затем проверка (правая)."""
-        # формируем пары по строкам row -> (url_btn, check_btn)
+        
         rows = {}
         for idx, btn in enumerate(buttons):
             row = btn.get('row', 0)
             rows.setdefault(row, []).append((idx, btn))
 
-        # сортируем строки
+        
         ordered_rows = sorted(rows.items())
 
-        url_tasks: List[tuple[int, Dict[str, Any]]] = []
-        check_indices: List[int] = []
-
+        
         for _, btns in ordered_rows:
-            # сортировка по column
+            
             btns_sorted = sorted(btns, key=lambda x: x[1].get('column', 0))
             url_btn = next((b for b in btns_sorted if b[1].get('type') == 'url'), None)
             check_btn = next((b for b in btns_sorted if b[1].get('type') == 'callback'), None)
-            if url_btn:
-                url_tasks.append((url_btn[0], url_btn[1]))
-            if check_btn:
-                check_indices.append(check_btn[0])
+            if not url_btn:
+                continue
 
-        # подписки сверху вниз
-        for idx, btn in url_tasks:
             channel_info = {
-                'index': idx,
-                'url': btn.get('url', ''),
-                'text': btn.get('text', '')
+                'index': url_btn[0],
+                'url': url_btn[1].get('url', ''),
+                'text': url_btn[1].get('text', '')
             }
             print(f"▶ Подписка: {channel_info['text']}")
             result = await self.subscribe_to_channel(channel_info)
 
-            # обработка ограничения времени
+            
             if isinstance(result, str) and 'wait' in result.lower():
                 wait_match = re.search(r'wait of (\d+)', result)
                 if wait_match:
                     wait_sec = int(wait_match.group(1)) + 5
                     print(f"⏳ Ожидание {wait_sec} сек. из-за лимита")
                     await asyncio.sleep(wait_sec)
+                    
                     continue
 
-            await asyncio.sleep(random.randint(*self.sub_delay_range))
+            if check_btn:
+                print(f"🔄 Проверка индекса {check_btn[0]}")
+                await self.click_button(check_btn[0])
+                await asyncio.sleep(random.randint(*self.check_delay_range))
 
-        # проверки сверху вниз
-        for check_idx in check_indices:
-            print(f"🔄 Проверка индекса {check_idx}")
-            await self.click_button(check_idx)
-            await asyncio.sleep(random.randint(*self.check_delay_range)) 
+            await asyncio.sleep(random.randint(*self.sub_delay_range)) 
