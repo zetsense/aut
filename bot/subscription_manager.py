@@ -12,19 +12,19 @@ class ChannelSubscriptionManager:
 
     def __init__(self, bot_handler):
         self.bot = bot_handler
-        
+        # базовые интервалы задержек (сек.)
         self.sub_delay_range = (12, 22)
         self.check_delay_range = (5, 9)
 
-    
+    # Проксирование атрибутов к исходному BotHandler
     def __getattr__(self, name):
         return getattr(self.bot, name)
 
-    
+    # --- методы, перенесённые из BotHandler ---
 
     async def handle_channel_subscriptions(self, buttons: List[Dict[str, Any]]):
         """Автоматическая подписка на каналы и проверка подписки"""
-        
+        # DEBUG вывод структуры кнопок
         print("[DEBUG] Структура кнопок (row/column/text/type/url):")
         for btn in buttons:
             print(f"ROW: {btn.get('row')} COL: {btn.get('column')} TEXT: {btn.get('text')} TYPE: {btn.get('type')} URL: {btn.get('url', '')}")
@@ -36,7 +36,7 @@ class ChannelSubscriptionManager:
                 print(f"[АВТО] Подписки заблокированы еще на {remaining_time} секунд, пропускаем обработку")
                 return
             elif self.subscription_blocked and current_time >= self.global_wait_until:
-                print("[АВТО] Время блокировки истекло, снимаем блокировку подписок")
+                print(f"[АВТО] Время блокировки истекло, снимаем блокировку подписок")
                 self.subscription_blocked = False
                 self.global_wait_until = 0
 
@@ -130,7 +130,7 @@ class ChannelSubscriptionManager:
                     print(f"[АВТО] Уже подписаны на канал {channel_info['text']}")
 
                 if check_info:
-                    print("[АВТО] Ожидание 5 секунд перед проверкой подписки...")
+                    print(f"[АВТО] Ожидание 5 секунд перед проверкой подписки...")
                     await asyncio.sleep(5)
                     print(f"[АВТО] Нажимаем кнопку проверки: {check_info['text']}")
                     success = await self.click_button(check_info['index'])
@@ -146,7 +146,7 @@ class ChannelSubscriptionManager:
                     await asyncio.sleep(delay)
 
             if navigation_buttons and channel_check_pairs:
-                print("[АВТО] Обработка страницы завершена. Ищем кнопку для перехода на следующую страницу...")
+                print(f"[АВТО] Обработка страницы завершена. Ищем кнопку для перехода на следующую страницу...")
                 next_button = None
                 for nav_btn in navigation_buttons:
                     if nav_btn['text'] in ['>', '→'] or 'next' in nav_btn['text'].lower():
@@ -160,13 +160,13 @@ class ChannelSubscriptionManager:
                     if success:
                         print(f"[АВТО] Кнопка '{next_button['text']}' нажата успешно")
                 else:
-                    print("[АВТО] Кнопка для перехода на следующую страницу не найдена")
-                    print("[АВТО] Завершаем обработку подписок - больше нет страниц")
+                    print(f"[АВТО] Кнопка для перехода на следующую страницу не найдена")
+                    print(f"[АВТО] Завершаем обработку подписок - больше нет страниц")
                     self.subscription_processing = False
                     self.last_subscription_message = None
                     self.last_subscription_buttons = None
             else:
-                print("[АВТО] Нет каналов для подписки на этой странице")
+                print(f"[АВТО] Нет каналов для подписки на этой странице")
                 self.subscription_processing = False
                 self.last_subscription_message = None
                 self.last_subscription_buttons = None
@@ -186,7 +186,7 @@ class ChannelSubscriptionManager:
                 print(f"[АВТО] Подписки заблокированы еще на {remaining_time} секунд, пропускаем обработку")
                 return
             elif self.subscription_blocked and current_time >= self.global_wait_until:
-                print("[АВТО] Время блокировки истекло, снимаем блокировку подписок")
+                print(f"[АВТО] Время блокировки истекло, снимаем блокировку подписок")
                 self.subscription_blocked = False
                 self.global_wait_until = 0
 
@@ -350,70 +350,52 @@ class ChannelSubscriptionManager:
             return None
 
     async def process_channel_buttons(self, buttons: List[Dict[str, Any]]):
-        """Подписка + проверка построчно, максимум 5 подряд, вывод таблицы"""
-        
-        
-        rows: Dict[int, Dict[str, Any]] = {}
+        """Подписаться на каналы (левая колонка), затем проверка (правая)."""
+        # формируем пары по строкам row -> (url_btn, check_btn)
+        rows = {}
         for idx, btn in enumerate(buttons):
-            r = btn.get('row', 0)
-            rows.setdefault(r, {})[btn.get('column', 0)] = (idx, btn)
+            row = btn.get('row', 0)
+            rows.setdefault(row, []).append((idx, btn))
 
-        ordered_rows = [rows[key] for key in sorted(rows.keys())]
+        # сортируем строки
+        ordered_rows = sorted(rows.items())
 
-        table_data = []  
-        performed = 0
+        url_tasks: List[tuple[int, Dict[str, Any]]] = []
+        check_indices: List[int] = []
 
-        for row in ordered_rows:
-            if performed >= 5:
-                break
+        for _, btns in ordered_rows:
+            # сортировка по column
+            btns_sorted = sorted(btns, key=lambda x: x[1].get('column', 0))
+            url_btn = next((b for b in btns_sorted if b[1].get('type') == 'url'), None)
+            check_btn = next((b for b in btns_sorted if b[1].get('type') == 'callback'), None)
+            if url_btn:
+                url_tasks.append((url_btn[0], url_btn[1]))
+            if check_btn:
+                check_indices.append(check_btn[0])
 
-            url_entry = row.get(0)
-            check_entry = row.get(1)
-            if not url_entry:
-                continue
+        # подписки сверху вниз
+        for idx, btn in url_tasks:
+            channel_info = {
+                'index': idx,
+                'url': btn.get('url', ''),
+                'text': btn.get('text', '')
+            }
+            print(f"▶ Подписка: {channel_info['text']}")
+            result = await self.subscribe_to_channel(channel_info)
 
-            idx, btn_dict = url_entry
-            channel_info = {'index': idx, 'url': btn_dict.get('url', ''), 'text': btn_dict.get('text', '')}
-
-            status = 'OK'
-            res = await self.subscribe_to_channel(channel_info)
-            if res is True:
-                status = 'OK'
-            elif isinstance(res, str) and 'wait' in res.lower():
-                wait_match = re.search(r'wait of (\d+)', res)
-                wait_sec = int(wait_match.group(1)) + 5 if wait_match else 60
-                status = f'WAIT {wait_sec}s'
-                table_data.append((channel_info['text'], status))
-                self._print_table(table_data)
-                print(f"⏳ Telegram ограничил. Ожидаем {wait_sec} сек.")
-                await asyncio.sleep(wait_sec)
-                break
-            elif res is False:
-                status = 'ERROR'
-            else:
-                status = 'SKIP'
-
-            table_data.append((channel_info['text'], status))
-            self._print_table(table_data)
+            # обработка ограничения времени
+            if isinstance(result, str) and 'wait' in result.lower():
+                wait_match = re.search(r'wait of (\d+)', result)
+                if wait_match:
+                    wait_sec = int(wait_match.group(1)) + 5
+                    print(f"⏳ Ожидание {wait_sec} сек. из-за лимита")
+                    await asyncio.sleep(wait_sec)
+                    continue
 
             await asyncio.sleep(random.randint(*self.sub_delay_range))
 
-            
-            if check_entry:
-                await self.click_button(check_entry[0])
-                await asyncio.sleep(random.randint(*self.check_delay_range))
-
-            performed += 1
-
-        if performed >= 5:
-            print("🚧 Достигнут лимит 5 подписок. Дождитесь следующего цикла...")
-
-    def _print_table(self, data):
-        
-        col_w = max(len(row[0]) for row in data) if data else 10
-        print("\n" + "-" * (col_w + 12))
-        print(f"{'Канал'.ljust(col_w)} | Статус")
-        print("-" * (col_w + 12))
-        for name, stat in data:
-            print(f"{name.ljust(col_w)} | {stat}")
-        print("-" * (col_w + 12) + "\n") 
+        # проверки сверху вниз
+        for check_idx in check_indices:
+            print(f"🔄 Проверка индекса {check_idx}")
+            await self.click_button(check_idx)
+            await asyncio.sleep(random.randint(*self.check_delay_range)) 
