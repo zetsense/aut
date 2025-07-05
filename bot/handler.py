@@ -4,6 +4,7 @@ from telethon.tl.types import KeyboardButton, KeyboardButtonCallback, ReplyInlin
 from typing import Optional, List, Dict, Any
 from .config import APP_ID, APP_HASH
 from .db import SubscriptionDB
+from .subscription_manager import ChannelSubscriptionManager
 import asyncio
 import random
 import re
@@ -34,6 +35,7 @@ class BotHandler:
         self.global_wait_until = 0  
         self.subscription_blocked = False  
         self.processing_lock = False  
+        self.sub_manager = ChannelSubscriptionManager(self)
 
     async def init(self):
         """Инициализация обработчика и базы данных"""
@@ -202,7 +204,7 @@ class BotHandler:
         """Handle incoming messages from the selected bot"""
         try:
             message = event.message
-            print(f"\n=== Сообщение от бота ===")
+            print("\n=== Сообщение от бота ===")
             print(f"Текст: {message.text}")
             
             
@@ -307,187 +309,45 @@ class BotHandler:
             print(f"[АВТО] Ошибка в автоматическом режиме: {e}")
             return False
 
+    def _print_channel_buttons(self, buttons: List[Dict[str, Any]]):
+        """Вывод структуры кнопок каналов"""
+        print("Кнопки каналов:")
+        for btn in buttons:
+            print(f"ROW: {btn.get('row')} COL: {btn.get('column')} TEXT: {btn.get('text')} TYPE: {btn.get('type')} URL: {btn.get('url', '')}")
+
     async def auto_handle_bot_response(self, event):
-        """Автоматическая обработка ответов бота"""
-        try:
-            
-            if self.processing_lock:
-                print("[АВТО] Обработка уже выполняется, пропускаем")
+        """Упрощённая автоматическая обработка сообщений (без подписок)"""
+        message = event.message
+        buttons = self.extract_buttons(message)
+        self.last_message = message
+        self.last_buttons = buttons
+
+        # Если появились кнопки каналов – выводим структуру и выходим
+        if any(btn.get('type') == 'url' and ('t.me/' in btn.get('url', '') or 'telegram.me/' in btn.get('url', '')) for btn in buttons):
+            self._print_channel_buttons(buttons)
+            await self.sub_manager.process_channel_buttons(buttons)
+            return
+
+        # Автовыбор языка
+        for i, btn in enumerate(buttons):
+            if 'русский' in btn.get('text', '').lower():
+                await asyncio.sleep(2)
+                await self.click_button(i)
                 return
-            
-            self.processing_lock = True
-            
-            message = event.message
-            print(f"\n[АВТО] === Получено сообщение от бота ===")
-            print(f"[АВТО] Текст сообщения: {message.text or '(пустое сообщение)'}")
-            
-            buttons = self.extract_buttons(message)
-            
-            
-            
-            if buttons or not self.subscription_processing:
-                self.last_message = message
-                self.last_buttons = buttons
-            else:
-                print("[АВТО] Сохраняем предыдущие кнопки для продолжения обработки")
-            
-            print(f"[АВТО] Найдено кнопок: {len(buttons)}")
-            
-            
-            print("\n=== ОТОБРАЖЕНИЕ ДЛЯ ПОЛЬЗОВАТЕЛЯ ===")
-            print(f"Текст: {message.text or '(пустое сообщение)'}")
-            if buttons:
-                print("Кнопки:")
-                for i, btn in enumerate(buttons):
-                    btn_info = f"{i + 1}. {btn['text']}"
-                    if btn.get('type') == 'url':
-                        btn_info += f" (URL: {btn.get('url', 'N/A')})"
-                    elif btn.get('type') == 'callback':
-                        btn_info += f" (callback: {btn.get('callback_data', 'N/A')})"
-                    print(btn_info)
-            else:
-                print("Кнопки отсутствуют")
-            print("=" * 40)
-            
-            
-            
-            if buttons:
-                print("[АВТО] Список доступных кнопок:")
-                for i, btn in enumerate(buttons):
-                    print(f"[АВТО]   {i + 1}. {btn['text']} (тип: {btn.get('type', 'unknown')}, строка: {btn.get('row')}, колонка: {btn.get('column')})")
-                
-                
-                clicked = False
-                
-                
-                print("[АВТО] Поиск кнопки 'Русский'...")
-                for i, btn in enumerate(buttons):
-                    if "русский" in btn['text'].lower():
-                        print(f"[АВТО] Найдена кнопка языка: {btn['text']}")
-                        print(f"[АВТО] Автоматически нажимаем кнопку: {btn['text']}")
-                        await asyncio.sleep(3)
-                        success = await self.click_button(i)
-                        if success:
-                            print(f"[АВТО] Кнопка '{btn['text']}' нажата успешно")
-                            clicked = True
-                        break
-                
-                
-                if not clicked:
-                    print("[АВТО] Поиск кнопки 'Заработать'...")
-                    for i, btn in enumerate(buttons):
-                        if "заработать" in btn['text'].lower() or "👨‍💻" in btn['text']:
-                            print(f"[АВТО] Найдена кнопка заработка: {btn['text']}")
-                            print(f"[АВТО] Автоматически нажимаем кнопку: {btn['text']}")
-                            await asyncio.sleep(3)
-                            success = await self.click_button(i)
-                            if success:
-                                print(f"[АВТО] Кнопка '{btn['text']}' нажата успешно")
-                                clicked = True
-                            break
-                
-                
-                if not clicked:
-                    print("[АВТО] Поиск кнопки 'Подписаться на канал'...")
-                    for i, btn in enumerate(buttons):
-                        if "подписаться" in btn['text'].lower() and "канал" in btn['text'].lower() and btn.get('type') == 'callback':
-                            print(f"[АВТО] Найдена кнопка подписки: {btn['text']}")
-                            print(f"[АВТО] Автоматически нажимаем кнопку: {btn['text']}")
-                            await asyncio.sleep(3)
-                            success = await self.click_button(i)
-                            if success:
-                                print(f"[АВТО] Кнопка '{btn['text']}' нажата успешно")
-                                clicked = True
-                            break
-                
-                
-                if not clicked:
-                    
-                    has_subscription_buttons = any(
-                        btn.get('type') == 'url' and ('t.me/' in btn.get('url', '') or 'telegram.me/' in btn.get('url', ''))
-                        for btn in buttons
-                    )
-                    
-                    if has_subscription_buttons:
-                        print("[АВТО] Обнаружены кнопки подписки, сохраняем сообщение")
-                        self.last_subscription_message = message
-                        self.last_subscription_buttons = buttons
-                        self.subscription_processing = True
-                        await self.handle_channel_subscriptions(buttons)
-                    else:
-                        
-                        has_check_buttons = any(
-                            btn.get('type') == 'callback' and ('проверить' in btn['text'].lower() or '🔄' in btn['text'])
-                            for btn in buttons
-                        )
-                        
-                        if has_check_buttons and self.last_subscription_buttons:
-                            print("[АВТО] Найдены кнопки проверки, обрабатываем с сохраненными кнопками подписки")
-                            
-                            if buttons:  
-                                self.last_message = message
-                                self.last_buttons = buttons
-                            await asyncio.sleep(5)
-                            await self.handle_channel_subscriptions_with_check(self.last_subscription_buttons, buttons)
-                        else:
-                            await asyncio.sleep(7)
-                            await self.handle_channel_subscriptions(buttons)
-                
-                
-                if not clicked and not self.subscription_blocked:
-                    print("[АВТО] Поиск кнопки 'Назад'...")
-                    for i, btn in enumerate(buttons):
-                        btn_text = btn['text'].lower()
-                        if "назад" in btn_text or "🔙" in btn['text'] or "back" in btn_text:
-                            print(f"[АВТО] Найдена кнопка возврата: {btn['text']}")
-                            print(f"[АВТО] Автоматически нажимаем кнопку: {btn['text']}")
-                            await asyncio.sleep(3)
-                            success = await self.click_button(i)
-                            if success:
-                                print(f"[АВТО] Кнопка '{btn['text']}' нажата успешно")
-                                print(f"[АВТО] Возвращаемся к главному меню...")
-                                await asyncio.sleep(5)
-                                clicked = True
-                            break
-                
-                if not clicked:
-                    
-                    if self.subscription_processing and self.last_subscription_buttons and not self.subscription_blocked:
-                        print("[АВТО] Продолжаем обработку сохраненных кнопок подписки")
-                        await self.handle_channel_subscriptions(self.last_subscription_buttons)
-                    elif not self.subscription_blocked:
-                        print("[АВТО] Не найдено подходящих кнопок для автоматического нажатия")
-                        print("[АВТО] Проверяем, нужно ли отправить текст '👨‍💻 Заработать'...")
-                        
-                        
-                        if message.text and "заработать" not in message.text.lower():
-                            print("[АВТО] Отправляем текстовое сообщение '👨‍💻 Заработать'...")
-                            await asyncio.sleep(5)
-                            await self.client.send_message(self.selected_bot, '👨‍💻 Заработать')
-                            print("[АВТО] Сообщение '👨‍💻 Заработать' отправлено")
-                    else:
-                        current_time = time.time()
-                        remaining_time = int(self.global_wait_until - current_time) if self.global_wait_until > current_time else 0
-                        print(f"[АВТО] Подписки заблокированы, пропускаем действия. Осталось ждать: {remaining_time} секунд")
-            else:
-                print("[АВТО] Кнопки не найдены в сообщении")
-                
-                if self.subscription_processing and self.last_subscription_buttons:
-                    print("[АВТО] Продолжаем обработку сохраненных кнопок подписки")
-                    await self.handle_channel_subscriptions(self.last_subscription_buttons)
-                else:
-                    
-                    if message.text and "вы не подписаны на канал" not in message.text.lower() and "заработать" not in message.text.lower():
-                        print("[АВТО] Отправляем текстовое сообщение '👨‍💻 Заработать'...")
-                        await asyncio.sleep(5)
-                        await self.client.send_message(self.selected_bot, '👨‍💻 Заработать')
-                        print("[АВТО] Сообщение '👨‍💻 Заработать' отправлено")
-                
-        except Exception as e:
-            print(f"[АВТО] Ошибка при автоматической обработке ответа бота: {e}")
-        finally:
-            
-            self.processing_lock = False
+
+        # Кнопка "Заработать"
+        for i, btn in enumerate(buttons):
+            if 'заработать' in btn.get('text', '').lower() or '👨‍💻' in btn.get('text', ''):
+                await asyncio.sleep(2)
+                await self.click_button(i)
+                return
+
+        # Кнопка "Подписаться на канал"
+        for i, btn in enumerate(buttons):
+            if 'подписаться' in btn.get('text', '').lower() and 'канал' in btn.get('text', '').lower() and btn.get('type') == 'callback':
+                await asyncio.sleep(2)
+                await self.click_button(i)
+                return
 
     async def handle_channel_subscriptions(self, buttons: List[Dict[str, Any]]):
         """Автоматическая подписка на каналы и проверка подписки"""
@@ -499,7 +359,7 @@ class BotHandler:
                 print(f"[АВТО] Подписки заблокированы еще на {remaining_time} секунд, пропускаем обработку")
                 return
             elif self.subscription_blocked and current_time >= self.global_wait_until:
-                print(f"[АВТО] Время блокировки истекло, снимаем блокировку подписок")
+                print("[АВТО] Время блокировки истекло, снимаем блокировку подписок")
                 self.subscription_blocked = False
                 self.global_wait_until = 0
             
@@ -617,7 +477,7 @@ class BotHandler:
                 
                 
                 if check_info:
-                    print(f"[АВТО] Ожидание 5 секунд перед проверкой подписки...")
+                    print("[АВТО] Ожидание 5 секунд перед проверкой подписки...")
                     await asyncio.sleep(5)
                     print(f"[АВТО] Нажимаем кнопку проверки: {check_info['text']}")
                     success = await self.click_button(check_info['index'])
@@ -635,7 +495,7 @@ class BotHandler:
             
             
             if navigation_buttons and channel_check_pairs:
-                print(f"[АВТО] Обработка страницы завершена. Ищем кнопку для перехода на следующую страницу...")
+                print("[АВТО] Обработка страницы завершена. Ищем кнопку для перехода на следующую страницу...")
                 next_button = None
                 for nav_btn in navigation_buttons:
                     if nav_btn['text'] in ['>', '→'] or 'next' in nav_btn['text'].lower():
@@ -649,13 +509,13 @@ class BotHandler:
                     if success:
                         print(f"[АВТО] Кнопка '{next_button['text']}' нажата успешно")
                 else:
-                    print(f"[АВТО] Кнопка для перехода на следующую страницу не найдена")
-                    print(f"[АВТО] Завершаем обработку подписок - больше нет страниц")
+                    print("[АВТО] Кнопка для перехода на следующую страницу не найдена")
+                    print("[АВТО] Завершаем обработку подписок - больше нет страниц")
                     self.subscription_processing = False
                     self.last_subscription_message = None
                     self.last_subscription_buttons = None
             else:
-                print(f"[АВТО] Нет каналов для подписки на этой странице")
+                print("[АВТО] Нет каналов для подписки на этой странице")
                 self.subscription_processing = False
                 self.last_subscription_message = None
                 self.last_subscription_buttons = None
@@ -676,7 +536,7 @@ class BotHandler:
                 print(f"[АВТО] Подписки заблокированы еще на {remaining_time} секунд, пропускаем обработку")
                 return
             elif self.subscription_blocked and current_time >= self.global_wait_until:
-                print(f"[АВТО] Время блокировки истекло, снимаем блокировку подписок")
+                print("[АВТО] Время блокировки истекло, снимаем блокировку подписок")
                 self.subscription_blocked = False
                 self.global_wait_until = 0
 
@@ -725,8 +585,8 @@ class BotHandler:
             
             try:
                 channel_entity = await self.client.get_entity(channel_username)
-                
-                participant = await self.client(functions.channels.GetParticipantRequest(
+
+                await self.client(functions.channels.GetParticipantRequest(
                     channel=channel_entity,
                     participant='me'
                 ))
